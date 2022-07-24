@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use embedded_svc::wifi::{
-    self, AuthMethod, Configuration, AccessPointConfiguration, ClientConfiguration,
-    ClientConnectionStatus, ClientIpStatus, ClientStatus, Wifi as _,
+    self, AuthMethod, ClientConfiguration, ClientConnectionStatus,
+    ClientIpStatus, ClientStatus, Configuration, Wifi as _,
 };
 use esp_idf_svc::{
     netif::EspNetifStack, nvs::EspDefaultNvs, sysloop::EspSysLoopStack, wifi::EspWifi,
@@ -61,21 +61,15 @@ pub fn wifi(ssid: &str, psk: &str) -> anyhow::Result<Wifi> {
 
     println!("setting Wifi configuration");
 
-    wifi.set_configuration(&Configuration::Mixed(
+    wifi.set_configuration(&Configuration::Client(
         ClientConfiguration {
             ssid: ssid.into(),
             password: psk.into(),
             channel,
             auth_method: auth_method,
             ..Default::default()
-        },
-        AccessPointConfiguration {
-            ssid: "aptest".into(),
-            channel: channel.unwrap_or(1),
-            ..Default::default()
-        },
+        }
     ))?;
-
     println!("Wifi configuration set, about to get status");
 
     wifi.wait_status_with_timeout(Duration::from_secs(20), |status| !status.is_transitional())
