@@ -1,0 +1,3 @@
+[smartonoff-rust]
+wifi_ssid = "YOUR-WIFI-SSID"
+wifi_psk = "YOUR-WIFI-PASSWORD"
