@@ -56,18 +56,18 @@ fn main() -> anyhow::Result<()> {
         let timer = Timer::new(peripherals.ledc.timer0, &config)?;
         let mut channel = Channel::new(peripherals.ledc.channel0, &timer, peripherals.pins.gpio4)?;
         let max_duty = channel.get_max_duty();
-        match rx.recv() {
-            Ok(msg) => {
-                println!("rx.received msg = {}", msg);
-                let go_on_running;
-                if msg == "on" {
-                    go_on_running = true;
-                } else {
-                    go_on_running = false;
-                }
-                println!("The LED lights start to fade in and fade out ...");
-                let max_num = 100;
-                loop {
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    println!("rx.received msg = {}", msg);
+                    let go_on_running;
+                    if msg == "on" {
+                        go_on_running = true;
+                    } else {
+                        go_on_running = false;
+                    }
+                    println!("The LED lights start to fade in and fade out ...");
+                    let max_num = 100;
                     for numerator in 0..(max_num + 1) {
                         if !go_on_running {
                             break;
@@ -82,17 +82,17 @@ fn main() -> anyhow::Result<()> {
                         channel.set_duty(max_duty * numerator / max_num)?;
                         FreeRtos.delay_ms(20)?;
                     }
-                    if !go_on_running {
-                        break;
+                    if go_on_running {
+                        FreeRtos.delay_ms(500)?;
                     }
-                    FreeRtos.delay_ms(500)?;
+                }
+                Err(_) => {
+                    let now = get_cur_time();
+                    println!("{} ~ Didn't receive any msg.", now);
                 }
             }
-            Err(_) => {
-                println!("Something is wrong, please check.");
-            }
+            sleep(Duration::from_millis(100));
         }
-        Ok(())
     });
 
     server.set_inline_handler("/led", Method::Get, move |request, response| {
