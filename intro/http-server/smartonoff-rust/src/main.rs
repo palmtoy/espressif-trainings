@@ -1,6 +1,6 @@
 use core::str;
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread,
     thread::sleep,
     time::Duration,
@@ -49,9 +49,34 @@ fn main() -> anyhow::Result<()> {
         writer.complete()
     })?;
 
-    server.set_inline_handler("/led", Method::Get, |request, response| {
-        thread::spawn(|| { func_blink_led_green() });
-        let html = index_html();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || -> anyhow::Result<()> {
+        let peripherals = Peripherals::take().unwrap();
+        let config = TimerConfig::default().frequency(25.kHz().into());
+        let timer = Timer::new(peripherals.ledc.timer0, &config)?;
+        let mut channel = Channel::new(peripherals.ledc.channel0, &timer, peripherals.pins.gpio4)?;
+        let max_duty = channel.get_max_duty();
+        match rx.recv() {
+            Ok(_) => {
+                println!("The LED lights start to fade in and fade out ...");
+                for numerator in [0, 1, 2, 3, 4, 5].iter().cycle() {
+                    println!("Duty {}/5", numerator);
+                    channel.set_duty(max_duty * numerator / 5)?;
+                    FreeRtos.delay_ms(2000)?;
+                }
+            }
+            Err(_) => {
+                println!("Something is wrong, please check.");
+            }
+        }
+        Ok(())
+    });
+
+    server.set_inline_handler("/led", Method::Get, move |request, response| {
+        let _ = tx.send(());
+        let now = get_cur_time();
+        println!("{} ~ Got a request path: /led", now);
+        let html = templated(format!("{} ~ The LED is fading in / out ...", now));
         let mut writer = response.into_writer(request)?;
         writer.do_write_all(html.as_bytes())?;
         writer.complete()
@@ -113,22 +138,3 @@ fn func_temperature(val: f32) -> String {
     templated(format!("{} ~ chip temperature: {:.2}°C", now, val))
 }
 
-fn func_blink_led_green() -> anyhow::Result<()> {
-    let now = get_cur_time();
-    println!("{} ~ Got a request path: /led", now);
-
-    let peripherals = Peripherals::take().unwrap();
-    let config = TimerConfig::default().frequency(25.kHz().into());
-    let timer = Timer::new(peripherals.ledc.timer0, &config)?;
-    let mut channel = Channel::new(peripherals.ledc.channel0, &timer, peripherals.pins.gpio4)?;
-
-    println!("Starting duty-cycle loop ...");
-
-    let max_duty = channel.get_max_duty();
-    for numerator in [0, 1, 2, 3, 4, 5].iter().cycle() {
-        println!("Duty {}/5", numerator);
-        channel.set_duty(max_duty * numerator / 5)?;
-        FreeRtos.delay_ms(2000)?;
-    }
-    Ok(())
-}
