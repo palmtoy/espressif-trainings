@@ -1,6 +1,6 @@
 use core::str;
 use std::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{mpsc, Arc, Mutex},
     thread,
     thread::sleep,
     time::Duration,
@@ -9,11 +9,12 @@ use std::{
 use bsc::{temp_sensor::BoardTempSensor, wifi::wifi};
 use embedded_svc::{
     http::{
-        server::{registry::Registry, Response, ResponseWrite},
+        server::{registry::Registry, Request, Response, ResponseWrite},
         Method,
     },
     io::Write,
 };
+
 use esp32_c3_dkc02_bsc as bsc;
 use esp_idf_svc::http::server::{Configuration, EspHttpServer};
 use esp_idf_sys as _; // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
@@ -25,7 +26,6 @@ use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::ledc::{config::TimerConfig, Channel, Timer};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::prelude::*;
-
 
 #[toml_cfg::toml_config]
 pub struct Config {
@@ -57,17 +57,33 @@ fn main() -> anyhow::Result<()> {
         let mut channel = Channel::new(peripherals.ledc.channel0, &timer, peripherals.pins.gpio4)?;
         let max_duty = channel.get_max_duty();
         match rx.recv() {
-            Ok(_) => {
+            Ok(msg) => {
+                println!("rx.received msg = {}", msg);
+                let go_on_running;
+                if msg == "on" {
+                    go_on_running = true;
+                } else {
+                    go_on_running = false;
+                }
                 println!("The LED lights start to fade in and fade out ...");
                 let max_num = 100;
                 loop {
-                    for numerator in 0..(max_num+1) {
+                    for numerator in 0..(max_num + 1) {
+                        if !go_on_running {
+                            break;
+                        }
                         channel.set_duty(max_duty * numerator / max_num)?;
                         FreeRtos.delay_ms(20)?;
                     }
-                    for numerator in (0..(max_num+1)).rev() {
+                    for numerator in (0..(max_num + 1)).rev() {
+                        if !go_on_running {
+                            break;
+                        }
                         channel.set_duty(max_duty * numerator / max_num)?;
                         FreeRtos.delay_ms(20)?;
+                    }
+                    if !go_on_running {
+                        break;
                     }
                     FreeRtos.delay_ms(500)?;
                 }
@@ -80,10 +96,19 @@ fn main() -> anyhow::Result<()> {
     });
 
     server.set_inline_handler("/led", Method::Get, move |request, response| {
-        let _ = tx.send(());
         let now = get_cur_time();
-        println!("{} ~ Got a request path: /led", now);
-        let html = templated(format!("{} ~ The LED is fading in / out ...", now));
+        let query_str = request.query_string().to_string();
+        println!(
+            "{} ~ Got a request path: /led, query_string = {}",
+            now, query_str
+        );
+        let html;
+        if query_str == "on" || query_str == "off" {
+            let _ = tx.send(query_str);
+            html = templated(format!("{} ~ The LED is fading in / out ...", now));
+        } else {
+            html = templated(format!("{} ~ Invalid cmd!", now));
+        }
         let mut writer = response.into_writer(request)?;
         writer.do_write_all(html.as_bytes())?;
         writer.complete()
@@ -144,4 +169,3 @@ fn func_temperature(val: f32) -> String {
     println!("{} ~ Got a request path: /temperature", now);
     templated(format!("{} ~ chip temperature: {:.2}°C", now, val))
 }
-
