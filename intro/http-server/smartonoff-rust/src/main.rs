@@ -59,10 +59,17 @@ fn main() -> anyhow::Result<()> {
         match rx.recv() {
             Ok(_) => {
                 println!("The LED lights start to fade in and fade out ...");
-                for numerator in [0, 1, 2, 3, 4, 5].iter().cycle() {
-                    println!("Duty {}/5", numerator);
-                    channel.set_duty(max_duty * numerator / 5)?;
-                    FreeRtos.delay_ms(2000)?;
+                let max_num = 100;
+                loop {
+                    for numerator in 0..(max_num+1) {
+                        channel.set_duty(max_duty * numerator / max_num)?;
+                        FreeRtos.delay_ms(20)?;
+                    }
+                    for numerator in (0..(max_num+1)).rev() {
+                        channel.set_duty(max_duty * numerator / max_num)?;
+                        FreeRtos.delay_ms(20)?;
+                    }
+                    FreeRtos.delay_ms(500)?;
                 }
             }
             Err(_) => {
