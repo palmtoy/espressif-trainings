@@ -1,6 +1,6 @@
 use core::str;
 use std::{
-    sync::{mpsc, Arc, Mutex},
+    sync::{mpsc, mpsc::Sender, Arc, Mutex},
     thread,
     thread::sleep,
     time::Duration,
@@ -49,64 +49,29 @@ fn main() -> anyhow::Result<()> {
         writer.complete()
     })?;
 
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || -> anyhow::Result<()> {
-        let peripherals = Peripherals::take().unwrap();
-        let config = TimerConfig::default().frequency(25.kHz().into());
-        let timer = Timer::new(peripherals.ledc.timer0, &config)?;
-        let mut channel = Channel::new(peripherals.ledc.channel0, &timer, peripherals.pins.gpio4)?;
-        let max_duty = channel.get_max_duty();
-        loop {
-            match rx.try_recv() {
-                Ok(msg) => {
-                    println!("rx.received msg = {}", msg);
-                    let go_on_running;
-                    if msg == "on" {
-                        go_on_running = true;
-                    } else {
-                        go_on_running = false;
-                    }
-                    println!("The LED lights start to fade in and fade out ...");
-                    let max_num = 100;
-                    for numerator in 0..(max_num + 1) {
-                        if !go_on_running {
-                            break;
-                        }
-                        channel.set_duty(max_duty * numerator / max_num)?;
-                        FreeRtos.delay_ms(20)?;
-                    }
-                    for numerator in (0..(max_num + 1)).rev() {
-                        if !go_on_running {
-                            break;
-                        }
-                        channel.set_duty(max_duty * numerator / max_num)?;
-                        FreeRtos.delay_ms(20)?;
-                    }
-                    if go_on_running {
-                        FreeRtos.delay_ms(500)?;
-                    }
-                }
-                Err(_) => {
-                    let now = get_cur_time();
-                    println!("{} ~ Didn't receive any msg.", now);
-                }
-            }
-            sleep(Duration::from_millis(100));
-        }
-    });
-
-    server.set_inline_handler("/led", Method::Get, move |request, response| {
+    server.set_inline_handler("/led", Method::Get, |request, response| {
         let now = get_cur_time();
         let query_str = request.query_string().to_string();
         println!(
             "{} ~ Got a request path: /led, query_string = {}",
             now, query_str
         );
+        let mut led_thread_handle = Some(spawn_led_thread());
         let html;
-        if query_str == "on" || query_str == "off" {
-            let _ = tx.send(query_str);
-            html = templated(format!("{} ~ The LED is fading in / out ...", now));
-        } else {
+        if query_str == "off" {
+            drop(led_thread_handle.take());
+            html = templated(format!("{} ~ The LED is off.", now));
+        } else if query_str == "on" {
+            if let Some(ref led_thread_handle) = led_thread_handle {
+                led_thread_handle.send(query_str).unwrap();
+                html = templated(format!("{} ~ The LED is fading in / out ...", now));
+            } else {
+                let tmp_msg = "The LED thread has been stopped!";
+                println!("{}", tmp_msg);
+                html = templated(format!("{} ~ {}", now, tmp_msg));
+            };
+        }
+        else {
             html = templated(format!("{} ~ Invalid cmd!", now));
         }
         let mut writer = response.into_writer(request)?;
@@ -130,6 +95,42 @@ fn main() -> anyhow::Result<()> {
     loop {
         sleep(Duration::from_millis(1000));
     }
+}
+
+fn spawn_led_thread() -> Sender<String> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let peripherals = Peripherals::take().unwrap();
+        let config = TimerConfig::default().frequency(25.kHz().into());
+        let timer = Timer::new(peripherals.ledc.timer0, &config).unwrap();
+        let mut channel = Channel::new(peripherals.ledc.channel0, &timer, peripherals.pins.gpio4).unwrap();
+        let max_duty = channel.get_max_duty();
+        match rx.recv() {
+            Ok(msg) => {
+                println!("rx.received msg = {}", msg);
+                if msg == "on" {
+                    println!("The LED lights start to fade in and fade out ...");
+                    let max_num = 100;
+                    loop {
+                        for numerator in 0..(max_num + 1) {
+                            channel.set_duty(max_duty * numerator / max_num).unwrap();
+                            FreeRtos.delay_ms(20).unwrap();
+                        }
+                        for numerator in (0..(max_num + 1)).rev() {
+                            channel.set_duty(max_duty * numerator / max_num).unwrap();
+                            FreeRtos.delay_ms(20).unwrap();
+                        }
+                        FreeRtos.delay_ms(500).unwrap();
+                    }
+                }
+            }
+            Err(_) => {
+                let now = get_cur_time();
+                println!("{} ~ Didn't receive any msg.", now);
+            }
+        }
+    });
+    tx
 }
 
 fn templated(content: impl AsRef<str>) -> String {
