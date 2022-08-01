@@ -49,17 +49,20 @@ fn main() -> anyhow::Result<()> {
         writer.complete()
     })?;
 
-    server.set_inline_handler("/led", Method::Get, |request, response| {
+    let led_thread_handle = Some(spawn_led_thread());
+    server.set_inline_handler("/led", Method::Get, move |request, response| {
         let now = get_cur_time();
         let query_str = request.query_string().to_string();
         println!(
             "{} ~ Got a request path: /led, query_string = {}",
             now, query_str
         );
-        let mut led_thread_handle = Some(spawn_led_thread());
         let html;
         if query_str == "off" {
-            drop(led_thread_handle.take());
+            if let Some(ref led_thread_handle) = led_thread_handle {
+                println!("{} ~ Try to drop the LED thread ...", now);
+                drop(led_thread_handle);
+            }
             html = templated(format!("{} ~ The LED is off.", now));
         } else if query_str == "on" {
             if let Some(ref led_thread_handle) = led_thread_handle {
